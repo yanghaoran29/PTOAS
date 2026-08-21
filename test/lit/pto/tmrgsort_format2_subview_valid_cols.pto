@@ -1,0 +1,30 @@
+// RUN: ptoas --pto-arch=a3 %s 2>&1 | FileCheck %s
+//
+// format2 merge of two column subviews: tmp/dst sized by valid window cols (1024+1024),
+// not parent physical cols (8192+8192).
+
+module {
+  func.func @tmrgsort_format2_subview_valid_cols(%ex: vector<4xi16>) {
+    %parent = pto.alloc_tile : !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=8192, v_row=1, v_col=8192, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %c0 = arith.constant 0 : index
+    %c4096 = arith.constant 4096 : index
+    %half0 = pto.subview %parent[%c0, %c0] sizes [1, 1024] :
+      !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=8192, v_row=1, v_col=8192, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+      -> !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=1024, v_row=1, v_col=1024, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %half1 = pto.subview %parent[%c0, %c4096] sizes [1, 1024] :
+      !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=8192, v_row=1, v_col=8192, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+      -> !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=1024, v_row=1, v_col=1024, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %dst = pto.alloc_tile : !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=2048, v_row=1, v_col=2048, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    %tmp = pto.alloc_tile : !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=2048, v_row=1, v_col=2048, blayout=row_major, slayout=none_box, fractal=512, pad=0>
+    pto.tmrgsort ins(%half0, %half1, %tmp {exhausted = false} :
+        !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=1024, v_row=1, v_col=1024, blayout=row_major, slayout=none_box, fractal=512, pad=0>,
+        !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=1024, v_row=1, v_col=1024, blayout=row_major, slayout=none_box, fractal=512, pad=0>,
+        !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=2048, v_row=1, v_col=2048, blayout=row_major, slayout=none_box, fractal=512, pad=0>)
+      outs(%dst, %ex :
+        !pto.tile_buf<loc=vec, dtype=f32, rows=1, cols=2048, v_row=1, v_col=2048, blayout=row_major, slayout=none_box, fractal=512, pad=0>,
+        vector<4xi16>)
+    return
+  }
+}
+
+// CHECK: {{^}}#include "pto/pto-inst.hpp"

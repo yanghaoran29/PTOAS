@@ -4690,11 +4690,37 @@ static SmallVector<int64_t, 4> getLogicalTileExtentVec(Type ty,
   return dims;
 }
 
+static int64_t getConstantIndexOrDynamic(Value v) {
+  if (!v) {
+    return ShapedType::kDynamic;
+  }
+  if (auto cOp = v.getDefiningOp<arith::ConstantIndexOp>()) {
+    return cOp.value();
+  }
+  if (auto cInt = v.getDefiningOp<arith::ConstantIntOp>()) {
+    return cInt.value();
+  }
+  if (auto cOp = v.getDefiningOp<arith::ConstantOp>()) {
+    if (auto ia = dyn_cast<IntegerAttr>(cOp.getValue())) {
+      return ia.getInt();
+    }
+  }
+  return ShapedType::kDynamic;
+}
+
 static SmallVector<int64_t, 4> getValidShapeVec(Value value) {
   if (!value) {
     return {};
   }
   auto valid = getValidShapeVec(value.getType());
+  if (auto subview = value.getDefiningOp<pto::SubViewOp>()) {
+    if (valid.size() >= 1 && subview.getValidRow()) {
+      valid[0] = getConstantIndexOrDynamic(subview.getValidRow());
+    }
+    if (valid.size() >= 2 && subview.getValidCol()) {
+      valid[1] = getConstantIndexOrDynamic(subview.getValidCol());
+    }
+  }
   return valid;
 }
 
