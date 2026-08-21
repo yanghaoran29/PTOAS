@@ -3839,6 +3839,7 @@ int mlir::pto::compilePTOASModule(
   rewriteScalarGMStoreFlushMarkers(cppOutput);
   rewriteEventIdArrayMarkers(cppOutput);
   rewriteGlobalTensorMetadataMarkers(cppOutput);
+  pto::rewriteClampedGlobalTensorOffsetTernaryPrecedence(cppOutput);
   pto::rewriteLastUseMarkersInCpp(cppOutput);
   rewriteAddPtrTraceMarkers(cppOutput, emitAddPtrTrace);
   rewriteMalformedVerbatimSemicolons(cppOutput);

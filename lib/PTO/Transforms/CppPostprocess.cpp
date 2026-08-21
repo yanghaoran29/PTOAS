@@ -15,6 +15,7 @@
 
 #include <cctype>
 #include <optional>
+#include <regex>
 #include <string>
 
 namespace mlir {
@@ -186,6 +187,84 @@ bool rewriteLastUseMarkersInCpp(std::string &cpp) {
     changed = true;
     searchPos = markerPos + replacement.size();
   }
+  return changed;
+}
+
+bool rewriteClampedGlobalTensorOffsetTernaryPrecedence(std::string &cpp) {
+  // EmitC can print clamped multi-term index offsets as:
+  //   base + (x < z ? z : x) * stride + chunk < z ? z : chunk
+  //   base + x * stride + chunk < z ? z : chunk
+  //   base + chunk < z ? z : chunk
+  // Because `?:` binds looser than `+`, C++ parses the false branch as the
+  // trailing operand instead of the full offset sum (cross-core UP_DOWN).
+  bool changed = false;
+
+  auto rewriteAll = [&](const std::regex &pattern, auto replacer) {
+    std::string rewritten;
+    rewritten.reserve(cpp.size());
+    auto it = std::sregex_iterator(cpp.begin(), cpp.end(), pattern);
+    auto end = std::sregex_iterator();
+    if (it == end) {
+      return;
+    }
+    size_t last = 0;
+    bool localChanged = false;
+    for (; it != end; ++it) {
+      rewritten.append(cpp, last, it->position() - last);
+      std::string replacement = replacer(*it);
+      if (replacement != it->str()) {
+        localChanged = true;
+      }
+      rewritten.append(replacement);
+      last = it->position() + it->length();
+    }
+    rewritten.append(cpp, last, std::string::npos);
+    if (localChanged) {
+      cpp = std::move(rewritten);
+      changed = true;
+    }
+  };
+
+  rewriteAll(
+      std::regex(
+          R"(\((v\d+)\s*\+\s*\((v\d+)\s*<\s*(v\d+)\s*\?\s*\3\s*:\s*(v\d+)\)\s*\*\s*(v\d+)\s*\+\s*(v\d+)\s*<\s*(v\d+)\s*\?\s*\7\s*:\s*(v\d+)\))"),
+      [](const std::smatch &match) -> std::string {
+        if (match.size() != 9 || match[6].str() != match[8].str()) {
+          return match.str();
+        }
+        return llvm::formatv("({0} + ({1} < {2} ? {2} : {3}) * {4} + ({5} < {6} ? {6"
+                             "} : {5}))",
+                             match[1].str(), match[2].str(), match[3].str(),
+                             match[4].str(), match[5].str(), match[6].str(),
+                             match[7].str())
+            .str();
+      });
+
+  rewriteAll(
+      std::regex(
+          R"(\((v\d+)\s*\+\s*(v\d+)\s*\*\s*(v\d+)\s*\+\s*(v\d+)\s*<\s*(v\d+)\s*\?\s*\5\s*:\s*(v\d+)\))"),
+      [](const std::smatch &match) -> std::string {
+        if (match.size() != 7 || match[4].str() != match[6].str()) {
+          return match.str();
+        }
+        return llvm::formatv("({0} + {1} * {2} + ({3} < {4} ? {4} : {3}))",
+                             match[1].str(), match[2].str(), match[3].str(),
+                             match[4].str(), match[5].str())
+            .str();
+      });
+
+  rewriteAll(
+      std::regex(
+          R"(\((v\d+)\s*\+\s*(v\d+)\s*<\s*(v\d+)\s*\?\s*\3\s*:\s*(v\d+)\))"),
+      [](const std::smatch &match) -> std::string {
+        if (match.size() != 5 || match[2].str() != match[4].str()) {
+          return match.str();
+        }
+        return llvm::formatv("({0} + ({1} < {2} ? {2} : {1}))", match[1].str(),
+                             match[2].str(), match[3].str())
+            .str();
+      });
+
   return changed;
 }
 

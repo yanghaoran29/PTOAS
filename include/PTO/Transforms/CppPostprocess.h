@@ -16,6 +16,10 @@ namespace pto {
 
 bool rewriteLastUseMarkersInCpp(std::string &cpp);
 
+// Fix C++ ternary/add precedence in clamped GlobalTensor subview offsets.
+// `a + b + c < d ? d : e` is parsed with false branch `e`, not the full sum.
+bool rewriteClampedGlobalTensorOffsetTernaryPrecedence(std::string &cpp);
+
 } // namespace pto
 } // namespace mlir
 
