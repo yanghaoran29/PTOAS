@@ -7896,7 +7896,7 @@ mlir::LogicalResult mlir::pto::TExtractOp::verify() {
   };
   auto isA5ExtractElemType = [&](Type ty) -> bool {
     if (isPTOFloat8Type(ty) || isPTOHiFloat8Type(ty) ||
-        isPTOFloat4PackedType(ty)) {
+        isPTOF8E8M0Type(ty) || isPTOFloat4PackedType(ty)) {
       return true;
     }
     if (auto it = dyn_cast<IntegerType>(ty)) {
@@ -8098,7 +8098,41 @@ mlir::LogicalResult mlir::pto::TExtractOp::verify() {
       if (hasPreQuantScalar || hasRelu) {
         return emitOpError("expects mat-source textract to use the base form without preQuantScalar or reluPreMode");
       }
-      if (!hasMatExtractSourceLayoutA5(srcTb, *dstSpace)) {
+      const bool isMxScaleExtract =
+          *dstSpace == pto::AddressSpace::SCALING &&
+          isPTOF8E8M0Type(srcElem) && isPTOF8E8M0Type(dstElem);
+      if (isMxScaleExtract) {
+        const int32_t bRowMajor =
+            static_cast<int32_t>(pto::BLayout::RowMajor);
+        const int32_t bColMajor =
+            static_cast<int32_t>(pto::BLayout::ColMajor);
+        const int32_t sRowMajor =
+            static_cast<int32_t>(pto::SLayout::RowMajor);
+        const int32_t sColMajor =
+            static_cast<int32_t>(pto::SLayout::ColMajor);
+        const int32_t srcBLayout = srcTb.getBLayoutValueI32();
+        const int32_t srcSLayout = srcTb.getSLayoutValueI32();
+        const int32_t dstBLayout = dstTb.getBLayoutValueI32();
+        const int32_t dstSLayout = dstTb.getSLayoutValueI32();
+        const bool isScaleLeft =
+            srcBLayout == bRowMajor && srcSLayout == sRowMajor &&
+            dstBLayout == bRowMajor && dstSLayout == sRowMajor;
+        const bool isScaleRight =
+            srcBLayout == bColMajor && srcSLayout == sColMajor &&
+            dstBLayout == bColMajor && dstSLayout == sColMajor;
+        if ((!isScaleLeft && !isScaleRight) ||
+            srcTb.getSFractalSizeI32() != 32 ||
+            dstTb.getSFractalSizeI32() != 32) {
+          return emitOpError(
+              "expects A5 MX scale textract src/dst to use matching "
+              "row_major/row_major (ScaleLeft) or "
+              "col_major/col_major (ScaleRight) layouts with fractal=32")
+                 << "; got src layout=" << srcBLayout << "/" << srcSLayout
+                 << ", fractal=" << srcTb.getSFractalSizeI32()
+                 << " and dst layout=" << dstBLayout << "/" << dstSLayout
+                 << ", fractal=" << dstTb.getSFractalSizeI32();
+        }
+      } else if (!hasMatExtractSourceLayoutA5(srcTb, *dstSpace)) {
         return emitOpError("expects A5 textract src to use a supported mat blayout/slayout combination");
       }
       if (*dstSpace == pto::AddressSpace::LEFT) {

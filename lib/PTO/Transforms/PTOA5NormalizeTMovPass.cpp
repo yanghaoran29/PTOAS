@@ -79,6 +79,13 @@ static bool isA5ScaleTileTMov(pto::TMovOp op) {
          *dstAS == pto::AddressSpace::SCALING;
 }
 
+static bool isA5ScaleTileTExtract(pto::TExtractOp op) {
+  auto srcAS = getAddressSpaceFromValueType(op.getSrc().getType());
+  auto dstAS = getAddressSpaceFromValueType(op.getDst().getType());
+  return srcAS && dstAS && *srcAS == pto::AddressSpace::MAT &&
+         *dstAS == pto::AddressSpace::SCALING;
+}
+
 static bool hasInterveningUsesOfDst(Operation *start, Operation *end,
                                     Value dst) {
   for (Operation *cursor = start->getNextNode(); cursor && cursor != end;
@@ -92,19 +99,25 @@ static bool hasInterveningUsesOfDst(Operation *start, Operation *end,
   return false;
 }
 
-static pto::TMovOp findMatchingScaleTileTMov(pto::TGetScaleAddrOp op) {
+static Operation *findMatchingScaleTileWrite(pto::TGetScaleAddrOp op) {
   Value dst = op.getDst();
   for (Operation *cursor = op->getPrevNode(); cursor; cursor = cursor->getPrevNode()) {
-    auto mov = dyn_cast<pto::TMovOp>(cursor);
-    if (!mov || mov.getDst() != dst || !isA5ScaleTileTMov(mov)) {
+    bool isMatchingWrite = false;
+    if (auto mov = dyn_cast<pto::TMovOp>(cursor)) {
+      isMatchingWrite = mov.getDst() == dst && isA5ScaleTileTMov(mov);
+    } else if (auto extract = dyn_cast<pto::TExtractOp>(cursor)) {
+      isMatchingWrite =
+          extract.getDst() == dst && isA5ScaleTileTExtract(extract);
+    }
+    if (!isMatchingWrite) {
       continue;
     }
-    if (hasInterveningUsesOfDst(mov, op, dst)) {
-      return {};
+    if (hasInterveningUsesOfDst(cursor, op, dst)) {
+      return nullptr;
     }
-    return mov;
+    return cursor;
   }
-  return {};
+  return nullptr;
 }
 
 template <typename CfgT>
@@ -192,11 +205,16 @@ struct PTOA5NormalizeTMovPass
     SmallVector<pto::TGetScaleAddrOp, kRiskyOpReserveSize> scaleAddrOps;
     func.walk([&](pto::TGetScaleAddrOp op) { scaleAddrOps.push_back(op); });
     for (pto::TGetScaleAddrOp op : scaleAddrOps) {
-      auto matchingTMov = findMatchingScaleTileTMov(op);
-      if (!matchingTMov) {
+      Operation *matchingWrite = findMatchingScaleTileWrite(op);
+      if (!matchingWrite) {
         continue;
       }
-      op->moveBefore(matchingTMov);
+      Operation *dataTileDef = op.getSrc().getDefiningOp();
+      if (!dataTileDef || dataTileDef->isBeforeInBlock(matchingWrite)) {
+        op->moveBefore(matchingWrite);
+      } else {
+        matchingWrite->moveAfter(op);
+      }
     }
 
     SmallVector<pto::TMovOp, kRiskyOpReserveSize> riskyOps;
